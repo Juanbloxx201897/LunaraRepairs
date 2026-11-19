@@ -1,6 +1,6 @@
 # Lunara Software — Lunara Repairs
 
-MVP académico para administrar reparaciones de dispositivos tecnológicos.
+Proyecto final de POO en la IUE. MVP académico para administrar reparaciones de dispositivos tecnológicos.
 
 ## Tecnologías
 - Backend: ASP.NET Core Web API, C#, MVC controllers y Entity Framework Core con persistencia CSV local.
