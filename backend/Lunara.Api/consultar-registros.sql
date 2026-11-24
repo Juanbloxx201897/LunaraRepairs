@@ -1,0 +1,1 @@
+-- Consultas SQLite: abre consultar-registros.sql3.

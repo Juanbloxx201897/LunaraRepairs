@@ -54,6 +54,18 @@ public class SparePartPurchase
     public DateTime? PurchasedAt { get; set; }
 }
 
+public class LaborPriceGuideEntry
+{
+    public int Id { get; set; }
+    public string DeviceType { get; set; } = "";
+    public string Brand { get; set; } = "";
+    public string WorkType { get; set; } = "";
+    public decimal Price { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsSample { get; set; }
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class Technician
 {
     public int Id { get; set; }
@@ -75,7 +87,10 @@ public class RepairOrder
     public string ProblemDescription { get; set; } = "";
     public string Diagnosis { get; set; } = "";
     public string WorkPerformed { get; set; } = "";
+    public string LaborWorkType { get; set; } = "Trabajo personalizado";
     public decimal? Budget { get; set; }
+    public decimal LaborCost { get; set; }
+    public string BudgetPartsJson { get; set; } = "[]";
     public string Status { get; set; } = RepairStatuses.Received;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

@@ -1,0 +1,40 @@
+@baseUrl = http://localhost:5080
+@token = replace-with-admin-or-technician-token
+
+### List active tariffs (technician) or all tariffs (administrator)
+GET {{baseUrl}}/api/laborprices
+Authorization: Bearer {{token}}
+
+### Read one tariff
+GET {{baseUrl}}/api/laborprices/1
+Authorization: Bearer {{token}}
+
+### Create a tariff (administrator)
+POST {{baseUrl}}/api/laborprices
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceType": "Celular",
+  "brand": "Apple",
+  "workType": "Cambio de pantalla",
+  "price": 120000,
+  "isActive": true
+}
+
+### Update or deactivate a tariff (administrator)
+PUT {{baseUrl}}/api/laborprices/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceType": "Celular",
+  "brand": "Apple",
+  "workType": "Cambio de pantalla",
+  "price": 135000,
+  "isActive": true
+}
+
+### Unknown tariff returns 404
+GET {{baseUrl}}/api/laborprices/999999
+Authorization: Bearer {{token}}

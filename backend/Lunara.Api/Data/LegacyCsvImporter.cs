@@ -5,11 +5,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Lunara.Api.Data;
 
-// Conserva las entidades operativas en archivos separados y mantiene sus relaciones por Id.
-public sealed class CsvDataStore(string directory)
+// Importa los datos CSV existentes al crear por primera vez la base de datos SQLite.
+public sealed class LegacyCsvImporter(string directory)
 {
-    private static readonly SemaphoreSlim WriteLock = new(1, 1);
-
     public async Task LoadIntoAsync(LunaraDbContext db)
     {
         db.Clients.AddRange(await ReadAsync<Client>("clients.csv"));
@@ -23,27 +21,6 @@ public sealed class CsvDataStore(string directory)
         await db.SaveChangesAsync();
     }
 
-    public async Task SaveAsync(LunaraDbContext db, CancellationToken cancellationToken = default)
-    {
-        await WriteLock.WaitAsync(cancellationToken);
-        try
-        {
-            Directory.CreateDirectory(directory);
-            await WriteAsync(db.Clients, "clients.csv", cancellationToken);
-            await WriteAsync(db.Technicians, "technicians.csv", cancellationToken);
-            await WriteAsync(db.SpareParts, "spare-parts.csv", cancellationToken);
-            await WriteAsync(db.SparePartPurchases, "spare-part-purchases.csv", cancellationToken);
-            await WriteAsync(db.AuthUsers, "auth-users.csv", cancellationToken);
-            await WriteAsync(db.Devices, "devices.csv", cancellationToken);
-            await WriteAsync(db.RepairOrders, "repairs.csv", cancellationToken);
-            await WriteAsync(db.RepairStatusHistory, "repair-history.csv", cancellationToken);
-        }
-        finally
-        {
-            WriteLock.Release();
-        }
-    }
-
     private async Task<List<T>> ReadAsync<T>(string fileName) where T : class, new()
     {
         var path = Path.Combine(directory, fileName);
@@ -55,29 +32,43 @@ public sealed class CsvDataStore(string directory)
             throw new InvalidDataException($"El archivo de datos está vacío: {path}");
 
         var properties = GetScalarProperties<T>();
-        if (!rows[0].SequenceEqual(properties.Select(property => property.Name)))
+        var headers = rows[0];
+        var optionalHeaders = typeof(T) == typeof(RepairOrder)
+            ? new HashSet<string>(["LaborCost", "BudgetPartsJson"], StringComparer.Ordinal)
+            : [];
+        var expectedHeaders = properties.Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
+        if (headers.Distinct(StringComparer.Ordinal).Count() != headers.Length ||
+            headers.Any(header => !expectedHeaders.Contains(header)) ||
+            expectedHeaders.Except(headers, StringComparer.Ordinal)
+                .Any(header => !optionalHeaders.Contains(header)))
             throw new InvalidDataException($"Los encabezados no coinciden con el formato esperado: {path}");
+        var propertyIndexes = headers.Select(header =>
+        {
+            var propertyIndex = Array.FindIndex(properties, property => property.Name == header);
+            return (PropertyIndex: propertyIndex, Header: header);
+        }).ToArray();
 
         var entities = new List<T>(rows.Count - 1);
         for (var rowIndex = 1; rowIndex < rows.Count; rowIndex++)
         {
             var row = rows[rowIndex];
-            if (row.Length != properties.Length)
+            if (row.Length != headers.Length)
                 throw new InvalidDataException($"La fila {rowIndex + 1} tiene una cantidad incorrecta de columnas: {path}");
 
             var entity = new T();
-            for (var columnIndex = 0; columnIndex < properties.Length; columnIndex++)
+            for (var columnIndex = 0; columnIndex < propertyIndexes.Length; columnIndex++)
             {
+                var (propertyIndex, header) = propertyIndexes[columnIndex];
                 try
                 {
-                    properties[columnIndex].SetValue(
+                    properties[propertyIndex].SetValue(
                         entity,
-                        ParseValue(row[columnIndex], properties[columnIndex]));
+                        ParseValue(row[columnIndex], properties[propertyIndex]));
                 }
                 catch (Exception exception) when (exception is FormatException or OverflowException or ArgumentException)
                 {
                     throw new InvalidDataException(
-                        $"Valor no válido en la fila {rowIndex + 1}, columna {properties[columnIndex].Name}: {path}",
+                        $"Valor no válido en la fila {rowIndex + 1}, columna {header}: {path}",
                         exception);
                 }
             }
@@ -86,39 +77,6 @@ public sealed class CsvDataStore(string directory)
         }
 
         return entities;
-    }
-
-    private async Task WriteAsync<T>(
-        DbSet<T> set,
-        string fileName,
-        CancellationToken cancellationToken) where T : class
-    {
-        var properties = GetScalarProperties<T>();
-        var rows = await set.AsNoTracking().ToListAsync(cancellationToken);
-        var content = new List<string>(rows.Count + 1)
-        {
-            string.Join(',', properties.Select(property => Escape(property.Name)))
-        };
-
-        content.AddRange(rows.Select(entity =>
-            string.Join(',', properties.Select(property =>
-                Escape(FormatValue(property.GetValue(entity)))))));
-
-        var path = Path.Combine(directory, fileName);
-        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            await File.WriteAllTextAsync(
-                temporaryPath,
-                string.Join(Environment.NewLine, content) + Environment.NewLine,
-                cancellationToken);
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-                File.Delete(temporaryPath);
-        }
     }
 
     private static PropertyInfo[] GetScalarProperties<T>() =>
@@ -138,14 +96,6 @@ public sealed class CsvDataStore(string directory)
                type == typeof(decimal) || type == typeof(bool) ||
                type == typeof(DateTime);
     }
-
-    private static string FormatValue(object? value) => value switch
-    {
-        null => "",
-        DateTime dateTime => dateTime.ToString("O", CultureInfo.InvariantCulture),
-        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-        _ => value.ToString() ?? ""
-    };
 
     private static object? ParseValue(string value, PropertyInfo property)
     {
@@ -170,11 +120,6 @@ public sealed class CsvDataStore(string directory)
             return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
         throw new InvalidOperationException($"Tipo CSV no compatible: {propertyType.Name}");
     }
-
-    private static string Escape(string value) =>
-        value.IndexOfAny([',', '"', '\r', '\n']) < 0
-            ? value
-            : $"\"{value.Replace("\"", "\"\"")}\"";
 
     private static List<string[]> Parse(string content)
     {

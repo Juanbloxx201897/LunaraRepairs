@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace Lunara.Api.Controllers;
 
@@ -12,7 +13,11 @@ namespace Lunara.Api.Controllers;
 [Route("api/[controller]")]
 [Authorize]
 // Atiende las solicitudes HTTP de reparaciones; las reglas de transición viven en RepairWorkflowService.
-public class RepairsController(LunaraDbContext db, RepairWorkflowService workflow) : ControllerBase
+public class RepairsController(
+    LunaraDbContext db,
+    RepairWorkflowService workflow,
+    IBudgetEmailService budgetEmailService,
+    IRepairReadyEmailService repairReadyEmailService) : ControllerBase
 {
     // Permite filtrar por estado o buscar órdenes y carga los datos que la pantalla necesita mostrar.
     [HttpGet]
@@ -162,17 +167,52 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
     // Guarda el diagnóstico y presupuesto; luego solicita aprobación mediante el flujo compartido.
     [HttpPut("{id:int}/diagnosis")]
     [Authorize(Roles = "Technician")]
-    public async Task<IActionResult> SaveDiagnosis(int id, DiagnosisDto dto)
+    public async Task<IActionResult> SaveDiagnosis(
+        int id,
+        DiagnosisDto dto,
+        CancellationToken cancellationToken)
     {
         var order = await db.RepairOrders.FirstOrDefaultAsync(x => x.Id == id);
         if (order is null) return NotFound();
         if (!IsAssignedTechnician(order)) return Forbid();
         if (order.Status is not (RepairStatuses.Received or RepairStatuses.Diagnosing))
             return BadRequest(new { message = "Solo se puede registrar el diagnóstico antes de solicitar aprobación." });
-        if (string.IsNullOrWhiteSpace(dto.Diagnosis) || dto.Budget < 0)
-            return BadRequest(new { message = "El diagnóstico es obligatorio y el presupuesto no puede ser negativo." });
+        if (string.IsNullOrWhiteSpace(dto.Diagnosis) ||
+            dto.WorkType is { Length: > 120 } ||
+            dto.LaborCost < 0 ||
+            dto.Budget < 0 ||
+            dto.Parts is { Count: > 30 } ||
+            dto.Parts?.Any(part => part.Quantity is < 1 or > 1000) == true)
+            return BadRequest(new { message = "El diagnóstico es obligatorio y los importes y cantidades del presupuesto deben ser válidos." });
+
+        var budgetLines = new List<BudgetPartLine>();
+        if (dto.Parts is { Count: > 0 })
+        {
+            if (dto.Parts.Select(part => part.SparePartId).Distinct().Count() != dto.Parts.Count)
+                return BadRequest(new { message = "No repitas un repuesto; ajusta su cantidad en una sola línea." });
+            var partIds = dto.Parts.Select(part => part.SparePartId).ToArray();
+            var catalog = await db.SpareParts.AsNoTracking()
+                .Where(part => partIds.Contains(part.Id))
+                .ToDictionaryAsync(part => part.Id, cancellationToken);
+            if (catalog.Count != partIds.Length)
+                return BadRequest(new { message = "Uno o más repuestos ya no están disponibles en el catálogo." });
+
+            budgetLines = dto.Parts.Select(line =>
+            {
+                var part = catalog[line.SparePartId];
+                return new BudgetPartLine(part.Name, line.Quantity, part.UnitPrice);
+            }).ToList();
+        }
+
         order.Diagnosis = dto.Diagnosis.Trim();
-        order.Budget = dto.Budget;
+        order.LaborWorkType = string.IsNullOrWhiteSpace(dto.WorkType)
+            ? "Trabajo personalizado"
+            : dto.WorkType.Trim();
+        order.LaborCost = dto.LaborCost;
+        order.BudgetPartsJson = JsonSerializer.Serialize(budgetLines);
+        order.Budget = dto.Parts is null && dto.LaborCost == 0
+            ? dto.Budget
+            : dto.LaborCost + budgetLines.Sum(line => line.Quantity * line.UnitPrice);
         if (order.Status == RepairStatuses.Received)
         {
             order.Status = RepairStatuses.Diagnosing;
@@ -180,20 +220,82 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
                 NewStatus = RepairStatuses.Diagnosing, Note = "Diagnóstico iniciado", ChangedAt = DateTime.UtcNow });
         }
         order.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
-        var result = await workflow.ChangeStatusAsync(id, RepairStatuses.PendingApproval, dto.Note ?? "Presupuesto enviado al cliente");
-        return result.Success ? NoContent() : BadRequest(new { message = result.Message });
+        await db.SaveChangesAsync(cancellationToken);
+        var result = await workflow.ChangeStatusAsync(
+            id,
+            RepairStatuses.PendingApproval,
+            dto.Note ?? "Presupuesto enviado para aprobación",
+            cancellationToken);
+        if (!result.Success)
+            return BadRequest(new { message = result.Message });
+
+        var orderForEmail = await db.RepairOrders.AsNoTracking()
+            .Include(repair => repair.Client)
+            .Include(repair => repair.Device)
+            .FirstAsync(repair => repair.Id == id, cancellationToken);
+        var emailResult = await budgetEmailService.SendAsync(orderForEmail, cancellationToken);
+        return Ok(new BudgetSubmissionResponse(emailResult.Sent, emailResult.Message));
+    }
+
+    [HttpPost("{id:int}/budget-email")]
+    public async Task<IActionResult> ResendBudgetEmail(int id, CancellationToken cancellationToken)
+    {
+        var order = await db.RepairOrders.AsNoTracking()
+            .Include(repair => repair.Client)
+            .Include(repair => repair.Device)
+            .FirstOrDefaultAsync(repair => repair.Id == id, cancellationToken);
+        if (order is null) return NotFound();
+        if (!IsAdmin() && !IsAssignedTechnician(order))
+            return Forbid();
+        if (order.Status != RepairStatuses.PendingApproval)
+            return BadRequest(new { message = "Solo se puede enviar por correo un presupuesto pendiente de aprobación." });
+
+        var result = await budgetEmailService.SendAsync(order, cancellationToken);
+        return result.Sent
+            ? Ok(new BudgetSubmissionResponse(true, result.Message))
+            : StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new BudgetSubmissionResponse(false, result.Message));
+    }
+
+    [HttpPost("{id:int}/ready-email")]
+    public async Task<IActionResult> ResendReadyEmail(int id, CancellationToken cancellationToken)
+    {
+        var order = await db.RepairOrders.AsNoTracking()
+            .Include(repair => repair.Client)
+            .Include(repair => repair.Device)
+            .FirstOrDefaultAsync(repair => repair.Id == id, cancellationToken);
+        if (order is null) return NotFound();
+        if (!IsAdmin() && !IsAssignedTechnician(order))
+            return Forbid();
+        if (order.Status != RepairStatuses.Ready)
+            return BadRequest(new { message = "Solo se puede enviar el aviso cuando el equipo está listo para recoger." });
+
+        var result = await repairReadyEmailService.SendAsync(order, cancellationToken);
+        return result.Sent
+            ? Ok(new ReadyNotificationResponse(true, result.Message))
+            : StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new ReadyNotificationResponse(false, result.Message));
     }
 
     // Centraliza los cambios de estado para que todos respeten las mismas reglas del negocio.
     [HttpPut("{id:int}/status")]
-    public async Task<IActionResult> ChangeStatus(int id, StatusUpdateDto dto)
+    public async Task<IActionResult> ChangeStatus(
+        int id,
+        StatusUpdateDto dto,
+        CancellationToken cancellationToken)
     {
         var order = await db.RepairOrders.FirstOrDefaultAsync(x => x.Id == id);
         if (order is null) return NotFound();
         if (IsAdmin())
         {
             if (order.Status != RepairStatuses.PendingApproval ||
+                dto.Status is not (RepairStatuses.Approved or RepairStatuses.Rejected))
+                return Forbid();
+        }
+        else if (User.IsInRole("Client"))
+        {
+            if (order.ClientId != UserIntClaim("clientId") ||
+                order.Status != RepairStatuses.PendingApproval ||
                 dto.Status is not (RepairStatuses.Approved or RepairStatuses.Rejected))
                 return Forbid();
         }
@@ -208,8 +310,22 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
             return Forbid();
         }
 
-        var result = await workflow.ChangeStatusAsync(id, dto.Status, dto.Note ?? "");
-        return result.Success ? NoContent() : BadRequest(new { message = result.Message });
+        var result = await workflow.ChangeStatusAsync(
+            id, dto.Status, dto.Note ?? "", cancellationToken);
+        if (!result.Success)
+            return BadRequest(new { message = result.Message });
+
+        if (dto.Status != RepairStatuses.Ready)
+            return NoContent();
+
+        var readyOrder = await db.RepairOrders.AsNoTracking()
+            .Include(repair => repair.Client)
+            .Include(repair => repair.Device)
+            .FirstAsync(repair => repair.Id == id, cancellationToken);
+        var emailResult = await repairReadyEmailService.SendAsync(
+            readyOrder,
+            cancellationToken);
+        return Ok(new ReadyNotificationResponse(emailResult.Sent, emailResult.Message));
     }
 
     // Registra el trabajo técnico solo mientras la orden está en reparación.
@@ -234,9 +350,40 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
     // Resume las órdenes por estado para alimentar las tarjetas y gráficos del dashboard.
     [HttpGet("stats")]
     [Authorize(Roles = "Admin,Administrator")]
-    public async Task<IActionResult> Stats()
+    public async Task<IActionResult> Stats(CancellationToken cancellationToken)
     {
         var orders = db.RepairOrders.AsNoTracking();
+        var now = DateTime.UtcNow;
+        var firstMonth = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+            .AddMonths(-5);
+        var deliveredSales = await db.RepairStatusHistory.AsNoTracking()
+            .Where(history =>
+                history.NewStatus == RepairStatuses.Delivered &&
+                history.ChangedAt >= firstMonth)
+            .Join(db.RepairOrders.AsNoTracking(),
+                history => history.RepairOrderId,
+                repair => repair.Id,
+                (history, repair) => new { history.ChangedAt, repair.Budget })
+            .ToListAsync(cancellationToken);
+        var monthlySales = Enumerable.Range(0, 6)
+            .Select(offset => firstMonth.AddMonths(offset))
+            .Select(month =>
+            {
+                var sales = deliveredSales.Where(sale =>
+                    sale.ChangedAt.Year == month.Year &&
+                    sale.ChangedAt.Month == month.Month).ToArray();
+                return new
+                {
+                    month = month.ToString("yyyy-MM"),
+                    revenue = sales.Sum(sale => sale.Budget ?? 0m),
+                    orders = sales.Length
+                };
+            })
+            .ToArray();
+        var deliveredBudgets = await orders
+            .Where(x => x.Status == RepairStatuses.Delivered)
+            .Select(x => x.Budget)
+            .ToListAsync(cancellationToken);
         return Ok(new {
             total = await orders.CountAsync(),
             received = await orders.CountAsync(x => x.Status == RepairStatuses.Received),
@@ -248,8 +395,8 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
             ready = await orders.CountAsync(x => x.Status == RepairStatuses.Ready),
             delivered = await orders.CountAsync(x => x.Status == RepairStatuses.Delivered),
             rejected = await orders.CountAsync(x => x.Status == RepairStatuses.Rejected),
-            deliveredRevenue = await orders.Where(x => x.Status == RepairStatuses.Delivered)
-                .SumAsync(x => x.Budget ?? 0m)
+            deliveredRevenue = deliveredBudgets.Sum(budget => budget ?? 0m),
+            monthlySales
         });
     }
 
@@ -267,6 +414,8 @@ public class RepairsController(LunaraDbContext db, RepairWorkflowService workflo
         IsAdmin() ||
         IsAssignedTechnician(order) ||
         (User.IsInRole("Client") && order.ClientId == UserIntClaim("clientId"));
+
+    private sealed record BudgetPartLine(string Name, int Quantity, decimal UnitPrice);
 
     private static string? NormalizeCedula(string? value)
     {

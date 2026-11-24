@@ -1,0 +1,53 @@
+-- sqlite
+-- Abre SQLite: Use Database en VS Code y selecciona data/lunara.db.
+-- Ejecuta una consulta con SQLite: Run Query (Cmd+Shift+Q).
+
+SELECT Id, Cedula, FullName, Email, Phone
+FROM Clients
+ORDER BY FullName
+LIMIT 100;
+
+SELECT
+    repair.Code,
+    client.FullName AS Cliente,
+    device.Brand,
+    device.Model,
+    technician.FullName AS Tecnico,
+    repair.Status,
+    repair.Budget,
+    repair.UpdatedAt
+FROM RepairOrders AS repair
+JOIN Clients AS client ON client.Id = repair.ClientId
+JOIN Devices AS device ON device.Id = repair.DeviceId
+LEFT JOIN Technicians AS technician ON technician.Id = repair.TechnicianId
+ORDER BY repair.UpdatedAt DESC
+LIMIT 100;
+
+SELECT Id, FullName, Email, Active
+FROM Technicians
+ORDER BY FullName;
+
+SELECT Id, Code, Name, Category, Brand, Quantity, UnitPrice
+FROM SpareParts
+ORDER BY Name;
+
+SELECT Id, Name, Supplier, Quantity, UnitPrice, Status, CreatedAt, PurchasedAt
+FROM SparePartPurchases
+ORDER BY CreatedAt DESC;
+
+SELECT
+    repair.Code AS Orden,
+    client.Cedula,
+    client.FullName AS Cliente,
+    device.Brand,
+    device.Model,
+    device.SerialNumber,
+    repair.ProblemDescription,
+    repair.Status,
+    history.NewStatus AS EstadoInicialGuardado
+FROM RepairOrders AS repair
+JOIN Clients AS client ON client.Id = repair.ClientId
+JOIN Devices AS device ON device.Id = repair.DeviceId
+JOIN RepairStatusHistory AS history ON history.RepairOrderId = repair.Id
+WHERE client.Cedula IN ('9999999999', '9999999998')
+ORDER BY repair.Id DESC;

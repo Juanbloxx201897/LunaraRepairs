@@ -1,10 +1,64 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { api, getToken, getUser, logout } from './services/api.js';
 
 const STATUSES = ['Recibido','Diagnóstico','Pendiente de aprobación','Aprobado','En reparación','En pruebas','Listo para recoger','Entregado','Rechazado por el cliente'];
 const money = value => value == null ? 'Pendiente' : new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(value);
 const date = value => value ? new Date(value).toLocaleDateString('es-CO') : '—';
+
+const DEVICE_BRANDS_BY_TYPE = {
+  Celular: ['Apple', 'Samsung', 'Xiaomi', 'Motorola', 'Huawei', 'Google', 'OPPO', 'HONOR', 'vivo', 'realme', 'OnePlus', 'Nokia', 'ZTE', 'TCL'],
+  Portátil: ['Acer', 'Apple', 'ASUS', 'Dell', 'Gigabyte', 'HP', 'Huawei', 'Lenovo', 'Microsoft', 'MSI', 'Samsung'],
+  Tableta: ['Apple', 'Amazon', 'Huawei', 'Lenovo', 'Microsoft', 'Samsung', 'Xiaomi'],
+  Consola: ['Nintendo', 'Sega', 'Sony', 'Valve', 'Microsoft'],
+  Computador: ['Acer', 'Apple', 'ASUS', 'Dell', 'Gigabyte', 'HP', 'Lenovo', 'Microsoft', 'MSI', 'Samsung'],
+  Otro: ['Acer', 'Apple', 'ASUS', 'Dell', 'HP', 'Huawei', 'Lenovo', 'Microsoft', 'Motorola', 'Samsung', 'Sony', 'Xiaomi'],
+};
+
+function DeviceBrandSelect({ id, type, value, onChange, devices = [] }) {
+  const [customSelected, setCustomSelected] = useState(false);
+  const options = useMemo(() => {
+    const registered = devices
+      .filter(device => device.type === type)
+      .map(device => device.brand?.trim())
+      .filter(Boolean);
+    return [...new Set([...(DEVICE_BRANDS_BY_TYPE[type] || DEVICE_BRANDS_BY_TYPE.Otro), ...registered])]
+      .sort((a, b) => a.localeCompare(b, 'es'));
+  }, [devices, type]);
+  const isCustom = customSelected || Boolean(value && !options.includes(value));
+
+  return (
+    <div className="device-brand-field">
+      <select
+        id={id}
+        className="form-select"
+        required
+        value={isCustom ? '__custom__' : value}
+        onChange={event => {
+          const nextValue = event.target.value;
+          const selectingCustom = nextValue === '__custom__';
+          setCustomSelected(selectingCustom);
+          onChange(selectingCustom ? '' : nextValue);
+        }}
+      >
+        <option value="">Selecciona una marca</option>
+        {options.map(brand => <option key={brand} value={brand}>{brand}</option>)}
+        <option value="__custom__">Otra marca…</option>
+      </select>
+      {isCustom && (
+        <input
+          className="form-control"
+          required
+          autoComplete="off"
+          value={value}
+          onChange={event => onChange(event.target.value)}
+          placeholder="Escribe la marca"
+          aria-label="Escribe otra marca"
+        />
+      )}
+    </div>
+  );
+}
 
 // Estructura común de navegación y encabezado; las rutas cargan aquí cada pantalla.
 function Shell({ role, userEmail, onLogout, children }) {
@@ -16,6 +70,7 @@ function Shell({ role, userEmail, onLogout, children }) {
       <div className="sidebar-label">ESPACIO DE TRABAJO</div>
       <NavLink to="/" end className="nav-item">{isTechnician ? '▤' : '▦'} <span>{isTechnician ? 'Mi trabajo' : 'Resumen'}</span></NavLink>
       {(isAdmin || isTechnician) && <NavLink to="/reparaciones" className="nav-item">⚙ <span>{isTechnician ? 'Mis órdenes' : 'Reparaciones'}</span></NavLink>}
+      {(isAdmin || isTechnician) && <NavLink to="/guia-precios" className="nav-item">₱ <span>Guía mano de obra</span></NavLink>}
       {isAdmin && <>
         <NavLink to="/clientes" className="nav-item">♙ <span>Clientes</span></NavLink>
         <NavLink to="/dispositivos" className="nav-item">▣ <span>Dispositivos</span></NavLink>
@@ -55,6 +110,31 @@ function MetricBars({ title, description, items }) {
   </section>;
 }
 
+function SalesChart({ sales = [] }) {
+  const maxRevenue = Math.max(1, ...sales.map(month => month.revenue));
+  return <section className="panel sales-chart">
+    <div className="panel-heading"><div><h3>Ventas por mes</h3><p>Ingresos de órdenes entregadas, según la fecha de entrega.</p></div></div>
+    {!sales.length
+      ? <div className="empty-state">Aún no hay ventas para mostrar.</div>
+      : <div className="sales-chart-grid">
+        {sales.map(month => {
+          const label = new Date(`${month.month}-01T12:00:00`).toLocaleDateString('es-CO', {
+            month: 'short',
+            year: '2-digit'
+          });
+          return <div className="sales-chart-column" key={month.month}>
+            <strong>{money(month.revenue)}</strong>
+            <div className="sales-chart-track" role="img" aria-label={`${label}: ${money(month.revenue)}, ${month.orders} ventas`}>
+              <div className="sales-chart-bar" style={{ height: `${month.revenue ? Math.max(5, month.revenue / maxRevenue * 100) : 0}%` }} />
+            </div>
+            <span>{label}</span>
+            <small>{month.orders} {month.orders === 1 ? 'venta' : 'ventas'}</small>
+          </div>;
+        })}
+      </div>}
+  </section>;
+}
+
 // El dashboard consulta las métricas y los registros recientes; solo se ocupa de presentarlos.
 function Dashboard({ user }) {
   const [stats,setStats]=useState(null), [repairs,setRepairs]=useState([]), [spareParts,setSpareParts]=useState([]), [error,setError]=useState('');
@@ -85,6 +165,7 @@ function Dashboard({ user }) {
       <MetricBars title="Órdenes por estado" description="Distribución de las reparaciones registradas." items={repairMetrics} />
       <MetricBars title="Existencias por categoría" description="Unidades disponibles en el inventario de repuestos." items={inventoryMetrics} />
     </div>
+    <SalesChart sales={stats?.monthlySales || []} />
     <section className="panel"><div className="panel-heading"><div><h3>Actividad reciente</h3><p>Últimas órdenes registradas en el sistema</p></div><Link to="/reparaciones">Ver todas →</Link></div>
       <RepairTable repairs={repairs.slice(0,6)} /></section>
     <section className="bottom-note"><div className="note-icon">✦</div><div><strong>Un solo lugar para cada reparación</strong><p>Desde la recepción hasta la entrega, cada actualización queda registrada.</p></div><span className="demo-label">MVP · DEMO</span></section>
@@ -136,6 +217,7 @@ function ClientRepairHistory({ repairs }) {
 // Guía el registro completo: crea cliente, dispositivo y orden mediante llamadas al backend.
 function NewRepair() {
   const [techs, setTechs] = useState([]);
+  const [devices, setDevices] = useState([]);
   const [form, setForm] = useState({
     cedula: '',
     fullName: '',
@@ -155,11 +237,13 @@ function NewRepair() {
   const [matchedClient, setMatchedClient] = useState(null);
   const [clientHistory, setClientHistory] = useState([]);
   const navigate = useNavigate();
-
   useEffect(() => {
-    api.technicians()
-      .then(setTechs)
-      .catch(() => setTechs([]));
+    Promise.all([api.technicians(), api.devices()])
+      .then(([technicians, registeredDevices]) => {
+        setTechs(technicians);
+        setDevices(registeredDevices);
+      })
+      .catch(e => setError(`No se pudieron cargar las sugerencias del formulario: ${e.message}`));
   }, []);
 
   useEffect(() => {
@@ -265,7 +349,9 @@ function NewRepair() {
       <span className="pill">NUEVO SERVICIO</span>
       <h3>Registrar reparación</h3>
       <p className="muted">
-        Registra al cliente, su equipo y la reparación en un solo paso.
+        Registra al cliente, su equipo y la reparación en un solo paso. El
+        presupuesto se enviará al correo del cliente cuando el técnico guarde
+        el diagnóstico y el presupuesto.
       </p>
 
       {error && <div className="alert alert-warning">{error}</div>}
@@ -353,7 +439,10 @@ function NewRepair() {
           <select
             className="form-select"
             value={form.type}
-            onChange={e => set('type', e.target.value)}
+            onChange={e => {
+              set('type', e.target.value);
+              set('brand', '');
+            }}
           >
             {['Celular', 'Portátil', 'Tableta', 'Consola', 'Computador', 'Otro']
               .map(type => <option key={type}>{type}</option>)}
@@ -361,13 +450,14 @@ function NewRepair() {
         </div>
 
         <div>
-          <label className="form-label">Marca *</label>
-          <input
-            className="form-control"
-            required
+          <label className="form-label" htmlFor="repair-device-brand">Marca *</label>
+          <DeviceBrandSelect
+            key={form.type}
+            id="repair-device-brand"
+            type={form.type}
             value={form.brand}
-            onChange={e => set('brand', e.target.value)}
-            placeholder="Ej. Samsung"
+            onChange={value => set('brand', value)}
+            devices={devices}
           />
         </div>
 
@@ -450,25 +540,102 @@ function NewRepair() {
 function RepairDetail({ role }) {
   const { pathname } = window.location;
   const id=pathname.split('/').pop();
-  const [repair,setRepair]=useState(null),[error,setError]=useState(''),[diagnosis,setDiagnosis]=useState(''),[budget,setBudget]=useState(''),[note,setNote]=useState(''),[work,setWork]=useState('');
+  const [repair,setRepair]=useState(null),[error,setError]=useState(''),[message,setMessage]=useState(''),[diagnosis,setDiagnosis]=useState(''),[laborCost,setLaborCost]=useState('0'),[note,setNote]=useState(''),[work,setWork]=useState('');
+  const [catalog,setCatalog]=useState([]),[selectedPartId,setSelectedPartId]=useState(''),[selectedParts,setSelectedParts]=useState([]);
+  const [laborPrices,setLaborPrices]=useState([]),[selectedLaborPriceId,setSelectedLaborPriceId]=useState('manual'),[laborWorkType,setLaborWorkType]=useState('Trabajo personalizado');
   const [technicians,setTechnicians]=useState([]),[assignedTechnicianId,setAssignedTechnicianId]=useState('');
   const [busy,setBusy]=useState(false);
-  const load=()=>api.repair(id).then(r=>{setRepair(r);setDiagnosis(r.diagnosis||'');setBudget(r.budget??'');setWork(r.workPerformed||'');setAssignedTechnicianId(r.technicianId == null ? '' : String(r.technicianId));}).catch(e=>setError(e.message));
+  const load=()=>api.repair(id).then(r=>{
+    setRepair(r);
+    setDiagnosis(r.diagnosis||'');
+    setLaborCost(String(r.laborCost ?? 0));
+    setLaborWorkType(r.laborWorkType || 'Trabajo personalizado');
+    setSelectedLaborPriceId('manual');
+    setWork(r.workPerformed||'');
+    setAssignedTechnicianId(r.technicianId == null ? '' : String(r.technicianId));
+    try {
+      const savedParts = JSON.parse(r.budgetPartsJson || '[]');
+      setSelectedParts(savedParts.map(part => ({
+        sparePartId: part.SparePartId ?? part.sparePartId,
+        name: part.Name ?? part.name,
+        quantity: part.Quantity ?? part.quantity,
+        unitPrice: part.UnitPrice ?? part.unitPrice
+      })));
+    } catch {
+      setError('No se pudo leer el detalle guardado del presupuesto.');
+    }
+  }).catch(e=>setError(e.message));
   useEffect(()=>{load();},[id]);
   useEffect(()=>{if(role==='Administrador')api.technicians().then(setTechnicians).catch(e=>setError(e.message));},[role]);
-  async function act(fn){setBusy(true);setError('');try{await fn();await load();}catch(e){setError(e.message);}finally{setBusy(false);}}
+  useEffect(()=>{if(role==='Técnico')Promise.all([api.sparePartCatalog(),api.laborPriceGuide()]).then(([parts,prices])=>{setCatalog(parts);setLaborPrices(prices);}).catch(e=>setError(e.message));},[role]);
+  const matchingLaborPrices = laborPrices.filter(entry =>
+    entry.deviceType.toLocaleLowerCase() === repair?.device?.type?.toLocaleLowerCase() &&
+    (entry.brand.toLocaleLowerCase() === repair?.device?.brand?.toLocaleLowerCase() ||
+      entry.brand.toLocaleLowerCase() === 'multimarca')
+  );
+  const quoteTotal = Number(laborCost || 0) +
+    selectedParts.reduce((total, part) => total + part.quantity * part.unitPrice, 0);
+  function addBudgetPart() {
+    const part = catalog.find(item => item.id === Number(selectedPartId));
+    if (!part) return;
+    setSelectedParts(current => {
+      const existing = current.find(line => line.sparePartId === part.id);
+      return existing
+        ? current.map(line => line.sparePartId === part.id ? { ...line, quantity: line.quantity + 1 } : line)
+        : [...current, { sparePartId: part.id, name: part.name, quantity: 1, unitPrice: part.unitPrice }];
+    });
+    setSelectedPartId('');
+  }
+  async function act(fn){
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await fn();
+      await load();
+      if (result?.message) {
+        if (result.emailSent === false) setError(result.message);
+        else setMessage(result.message);
+      }
+    } catch(e) {
+      setError(e.message);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
   if(!repair)return <section className="panel">{error||'Cargando reparación...'}</section>;
   return <section className="panel detail-panel"><Link to="/reparaciones" className="back-link">← Todas las reparaciones</Link>
     {error&&<div className="alert alert-warning">{error}</div>}
+    {message&&<div className="alert alert-success">{message}</div>}
     <div className="detail-header"><div><span className="pill">ORDEN {repair.code}</span><h3>{repair.device?.brand} {repair.device?.model}</h3><p>{repair.problemDescription}</p></div><StatusBadge status={repair.status}/></div>
     <div className="detail-grid"><div className="detail-box"><small>CLIENTE</small><strong>{repair.client?.fullName}</strong><span>Cédula: {repair.client?.cedula}</span><span>{repair.client?.email}</span></div><div className="detail-box"><small>TÉCNICO</small><strong>{repair.technician?.fullName||'Sin asignar'}</strong><span>Creada el {date(repair.createdAt)}</span></div><div className="detail-box"><small>PRESUPUESTO</small><strong>{money(repair.budget)}</strong><span>Valor estimado</span></div></div>
+    {role === 'Cliente' && <div className="workflow-box client-repair-information">
+      <h4>Información de tu servicio</h4>
+      <div className="client-repair-facts">
+        <div><small>Equipo</small><strong>{repair.device?.type} · {repair.device?.brand} {repair.device?.model}</strong></div>
+        {repair.device?.serialNumber && <div><small>Número de serie</small><strong>{repair.device.serialNumber}</strong></div>}
+        {repair.device?.description && <div><small>Descripción del equipo</small><p>{repair.device.description}</p></div>}
+        <div><small>Problema reportado</small><p>{repair.problemDescription || 'Sin descripción disponible.'}</p></div>
+        <div><small>Diagnóstico técnico</small><p>{repair.diagnosis || 'El técnico aún no ha registrado el diagnóstico.'}</p></div>
+        <div><small>Trabajo realizado</small><p>{repair.workPerformed || 'El técnico aún no registra trabajos realizados.'}</p></div>
+      </div>
+    </div>}
+    {repair.budget != null && <div className="workflow-box quote-summary"><h4>Detalle del presupuesto</h4>
+      {(selectedParts||[]).map(part=><div className="quote-line" key={part.sparePartId}><span>{part.name} × {part.quantity}</span><strong>{money(part.unitPrice * part.quantity)}</strong></div>)}
+      <div className="quote-line"><span>Mano de obra · {repair.laborWorkType || 'Trabajo personalizado'}</span><strong>{money(repair.laborCost || 0)}</strong></div>
+      <div className="quote-line quote-total"><span>Total</span><strong>{money(repair.budget)}</strong></div>
+    </div>}
     {role === 'Administrador' && <div className="workflow-box"><h4>Asignación del técnico</h4><div className="d-flex gap-2 flex-wrap"><select className="form-select" style={{ maxWidth: 360 }} aria-label="Asignar técnico" value={assignedTechnicianId} onChange={e=>setAssignedTechnicianId(e.target.value)}><option value="">Sin asignar</option>{technicians.map(technician=><option key={technician.id} value={technician.id}>{technician.fullName} · {technician.workload} activas · {technician.availability}</option>)}</select><button className="btn btn-lunara" disabled={busy || String(repair.technicianId ?? '') === assignedTechnicianId} onClick={()=>act(()=>api.assignTechnician(id,assignedTechnicianId ? Number(assignedTechnicianId) : null))}>Guardar asignación</button></div></div>}
-    <div className="timeline"><h4>Seguimiento del servicio</h4>{(repair.history||[]).map(h=><div className="timeline-item" key={h.id}><span className="timeline-dot"/><div><strong>{h.newStatus}</strong><p>{h.note||'Actualización de estado'}</p><small>{new Date(h.changedAt).toLocaleString('es-CO')}</small></div></div>)}</div>
-    {role === 'Técnico' && (repair.status==='Recibido'||repair.status==='Diagnóstico')&&<div className="workflow-box"><h4>Diagnóstico y presupuesto</h4><label className="form-label">Diagnóstico</label><textarea className="form-control mb-3" rows="3" value={diagnosis} onChange={e=>setDiagnosis(e.target.value)}/><label className="form-label">Presupuesto (COP)</label><input type="number" min="0" className="form-control mb-3" value={budget} onChange={e=>setBudget(e.target.value)} required/><label className="form-label">Nota para el historial</label><input className="form-control mb-3" value={note} onChange={e=>setNote(e.target.value)} placeholder="Observación opcional"/><button className="btn btn-lunara" disabled={busy||!diagnosis.trim()||budget==='' } onClick={()=>act(()=>api.diagnosis(id,{diagnosis,budget:Number(budget),note}))}>Enviar presupuesto al administrador</button></div>}
+    <div className="timeline"><h4>{role === 'Cliente' ? 'Seguimiento y observaciones' : 'Seguimiento del servicio'}</h4>{repair.history?.length ? repair.history.map(h=><div className="timeline-item" key={h.id}><span className="timeline-dot"/><div><strong>{h.newStatus}</strong><p>{h.note||'Actualización de estado'}</p><small>{new Date(h.changedAt).toLocaleString('es-CO')}</small></div></div>) : <p className="muted">Todavía no hay observaciones registradas para este servicio.</p>}</div>
+    {role === 'Técnico' && (repair.status==='Recibido'||repair.status==='Diagnóstico')&&<div className="workflow-box"><h4>Diagnóstico y guía de precios</h4><label className="form-label">Diagnóstico</label><textarea className="form-control mb-3" rows="3" value={diagnosis} onChange={e=>setDiagnosis(e.target.value)}/><div className="budget-part-picker"><label className="form-label" htmlFor="labor-price-guide">Mano de obra para {repair.device?.brand} · {repair.device?.type}</label><select id="labor-price-guide" className="form-select mb-2" value={selectedLaborPriceId} onChange={e=>{const value=e.target.value;setSelectedLaborPriceId(value);if(value==='manual'){setLaborWorkType('Trabajo personalizado');return;}const selected=matchingLaborPrices.find(entry=>String(entry.id)===value);if(selected){setLaborWorkType(selected.workType);setLaborCost(String(selected.price));}}}><option value="manual">Trabajo personalizado / sin tarifa</option>{matchingLaborPrices.map(entry=><option key={entry.id} value={entry.id}>{entry.workType} · {money(entry.price)}</option>)}</select>{selectedLaborPriceId==='manual'&&<input className="form-control mb-3" aria-label="Tipo de trabajo" maxLength="120" value={laborWorkType==='Trabajo personalizado'?'':laborWorkType} onChange={e=>setLaborWorkType(e.target.value)} placeholder="Describe el tipo de trabajo"/>}{matchingLaborPrices.length===0&&<small className="muted">El administrador aún no ha registrado tarifas para esta marca y tipo de equipo.</small>}</div><div className="budget-part-picker"><label className="form-label" htmlFor="budget-part">Repuestos del inventario</label><div className="d-flex gap-2"><select id="budget-part" className="form-select" value={selectedPartId} onChange={e=>setSelectedPartId(e.target.value)}><option value="">Selecciona un repuesto</option>{catalog.map(part=><option key={part.id} value={part.id}>{part.name} · {money(part.unitPrice)} · existencias: {part.quantity}</option>)}</select><button type="button" className="btn btn-outline-primary" disabled={!selectedPartId} onClick={addBudgetPart}>Agregar</button></div>{!catalog.length&&<small className="muted">No hay repuestos en inventario; puedes calcular solo la mano de obra.</small>}</div>{selectedParts.map(part=><div className="quote-line editable-quote-line" key={part.sparePartId}><span>{part.name} · {money(part.unitPrice)} c/u</span><input aria-label={`Cantidad de ${part.name}`} type="number" min="1" max="1000" className="form-control" value={part.quantity} onChange={e=>setSelectedParts(current=>current.map(line=>line.sparePartId===part.sparePartId?{...line,quantity:Math.min(1000,Math.max(1,Number(e.target.value)||1))}:line))}/><strong>{money(part.unitPrice*part.quantity)}</strong><button type="button" className="btn btn-sm btn-outline-danger" aria-label={`Quitar ${part.name}`} onClick={()=>setSelectedParts(current=>current.filter(line=>line.sparePartId!==part.sparePartId))}>Quitar</button></div>)}<label className="form-label mt-3">Mano de obra (COP) · ajustable</label><input type="number" min="0" step="1000" className="form-control mb-3" value={laborCost} onChange={e=>setLaborCost(e.target.value)} required/><div className="quote-line quote-total mb-3"><span>Total calculado</span><strong>{money(quoteTotal)}</strong></div><label className="form-label">Nota para el historial</label><input className="form-control mb-3" value={note} onChange={e=>setNote(e.target.value)} placeholder="Observación opcional"/><button className="btn btn-lunara" disabled={busy||!diagnosis.trim()||!laborWorkType.trim()||laborCost===''||Number(laborCost)<0||!Number.isFinite(quoteTotal)||quoteTotal<0 } onClick={()=>act(()=>api.diagnosis(id,{diagnosis,budget:quoteTotal,laborCost:Number(laborCost),workType:laborWorkType,parts:selectedParts.map(({sparePartId,quantity})=>({sparePartId,quantity})),note}))}>Enviar presupuesto al cliente</button></div>}
+    {(role === 'Técnico' || role === 'Administrador') && repair.status==='Pendiente de aprobación'&&<div className="workflow-box"><h4>Envío del presupuesto</h4><p className="muted mb-3">Presupuesto dirigido a {repair.client?.email}.</p><button className="btn btn-outline-primary" disabled={busy} onClick={()=>act(()=>api.sendBudgetEmail(id))}>Reenviar presupuesto por correo</button></div>}
+    {(role === 'Técnico' || role === 'Administrador') && repair.status==='Listo para recoger'&&<div className="workflow-box"><h4>Aviso al cliente</h4><p className="muted mb-3">Se notificará a {repair.client?.email} que su equipo está listo para recoger.</p><button className="btn btn-outline-primary" disabled={busy} onClick={()=>act(()=>api.sendReadyEmail(id))}>Reenviar aviso de equipo listo</button></div>}
     {role === 'Técnico' && repair.status==='En reparación'&&<div className="workflow-box"><h4>Registrar trabajo realizado</h4><textarea className="form-control mb-3" rows="3" value={work} onChange={e=>setWork(e.target.value)} placeholder="Describe el trabajo técnico..."/><button className="btn btn-outline-primary" disabled={busy||!work.trim()} onClick={()=>act(()=>api.work(id,work,'Trabajo registrado'))}>Guardar trabajo</button></div>}
     {(role === 'Técnico' || role === 'Administrador' || role === 'Cliente') && <div className="workflow-box"><h4>{role === 'Técnico' ? 'Actualizar estado del equipo' : role === 'Administrador' ? 'Revisión del presupuesto' : 'Estado del presupuesto'}</h4><div className="action-wrap">
       {role === 'Administrador' && repair.status==='Pendiente de aprobación'&&<><button className="btn btn-success" disabled={busy} onClick={()=>act(()=>api.status(id,'Aprobado','Presupuesto aprobado por el administrador'))}>Aprobar presupuesto</button><button className="btn btn-outline-danger" disabled={busy} onClick={()=>act(()=>api.status(id,'Rechazado por el cliente','Presupuesto rechazado por el administrador'))}>Rechazar presupuesto</button></>}
-      {role === 'Cliente' && <span className="muted">{repair.status==='Pendiente de aprobación' ? 'El presupuesto está pendiente de revisión del administrador.' : `El estado actual de tu servicio es: ${repair.status}.`}</span>}
+      {role === 'Cliente' && repair.status==='Pendiente de aprobación'&&<><span className="muted">Revisa el detalle del presupuesto y confirma si autorizas la reparación.</span><button className="btn btn-success" disabled={busy} onClick={()=>act(()=>api.status(id,'Aprobado','Presupuesto aprobado por el cliente'))}>Aprobar presupuesto</button><button className="btn btn-outline-danger" disabled={busy} onClick={()=>act(()=>api.status(id,'Rechazado por el cliente','Presupuesto rechazado por el cliente'))}>Rechazar presupuesto</button></>}
+      {role === 'Cliente' && repair.status!=='Pendiente de aprobación'&&<span className="muted">{repair.status==='Aprobado' ? 'Aprobaste el presupuesto; el técnico continuará con la reparación.' : `El estado actual de tu servicio es: ${repair.status}.`}</span>}
       {role === 'Técnico' && repair.status==='Aprobado'&&<button className="btn btn-lunara" disabled={busy} onClick={()=>act(()=>api.status(id,'En reparación','Inicio de reparación'))}>Iniciar reparación</button>}
       {role === 'Técnico' && repair.status==='En reparación'&&<button className="btn btn-lunara" disabled={busy} onClick={()=>act(()=>api.status(id,'En pruebas','Reparación terminada; pasa a pruebas'))}>Enviar a pruebas</button>}
       {role === 'Técnico' && repair.status==='En pruebas'&&<><button className="btn btn-lunara" disabled={busy} onClick={()=>act(()=>api.status(id,'Listo para recoger','Pruebas satisfactorias'))}>Pruebas satisfactorias</button><button className="btn btn-outline-warning" disabled={busy} onClick={()=>act(()=>api.status(id,'En reparación','Se requieren ajustes adicionales'))}>Requiere ajustes</button></>}
@@ -476,7 +643,7 @@ function RepairDetail({ role }) {
       {['Entregado','Rechazado por el cliente'].includes(repair.status)&&<span className="muted">Esta orden ha finalizado.</span>}
       {role === 'Técnico' && repair.status==='Pendiente de aprobación'&&<span className="muted">Esperando revisión del presupuesto por el administrador.</span>}
     </div></div>}
-    {role === 'Administrador' && <p className="muted">El administrador aprueba o rechaza los presupuestos. Los cambios técnicos de diagnóstico y estado los realiza el técnico asignado.</p>}
+    {role === 'Administrador' && <p className="muted">El cliente o el administrador pueden aprobar o rechazar el presupuesto. Los cambios técnicos de diagnóstico y estado los realiza el técnico asignado.</p>}
   </section>;
 }
 
@@ -559,12 +726,123 @@ function Clients() {
 function Devices() {
   const [clients,setClients]=useState([]),[devices,setDevices]=useState([]),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [form,setForm]=useState({clientId:'',type:'Celular',brand:'',model:'',serialNumber:'',description:''});
+  const brands = [...new Set(devices.map(device => device.brand?.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'es'));
   const load=()=>Promise.all([api.clients(),api.devices()]).then(([c,d])=>{setClients(c);setDevices(d);}).catch(e=>setError(e.message));
   useEffect(()=>{load();},[]);
   async function submit(e){e.preventDefault();setError('');setMessage('');try{await api.createDevice({...form,clientId:Number(form.clientId)});setMessage('Dispositivo registrado.');setForm({clientId:'',type:'Celular',brand:'',model:'',serialNumber:'',description:''});load();}catch(e){setError(e.message);}}
   return <section className="panel page-panel"><span className="pill">INVENTARIO</span><h3>Dispositivos</h3><p className="muted">Registra los equipos que ingresan al negocio.</p>{error&&<div className="alert alert-warning">{error}</div>}{message&&<div className="alert alert-success">{message}</div>}
-    <form onSubmit={submit} className="form-grid compact-form"><div><label className="form-label">Cliente *</label><select className="form-select" required value={form.clientId} onChange={e=>setForm({...form,clientId:e.target.value})}><option value="">Seleccionar</option>{clients.map(c=><option key={c.id} value={c.id}>{c.cedula} — {c.fullName}</option>)}</select></div><div><label className="form-label">Tipo *</label><select className="form-select" required value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>{['Celular','Portátil','Tableta','Consola','Otro'].map(x=><option key={x}>{x}</option>)}</select></div><div><label className="form-label">Marca *</label><input className="form-control" required value={form.brand} onChange={e=>setForm({...form,brand:e.target.value})}/></div><div><label className="form-label">Modelo *</label><input className="form-control" required value={form.model} onChange={e=>setForm({...form,model:e.target.value})}/></div><div><label className="form-label">Serial *</label><input className="form-control" required value={form.serialNumber} onChange={e=>setForm({...form,serialNumber:e.target.value})}/></div><div><label className="form-label">Descripción *</label><input className="form-control" required value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div><div className="full-width"><button className="btn btn-lunara">Registrar dispositivo</button></div></form>
+    <form onSubmit={submit} className="form-grid compact-form"><div><label className="form-label">Cliente *</label><select className="form-select" required value={form.clientId} onChange={e=>setForm({...form,clientId:e.target.value})}><option value="">Seleccionar</option>{clients.map(c=><option key={c.id} value={c.id}>{c.cedula} — {c.fullName}</option>)}</select></div><div><label className="form-label">Tipo *</label><select className="form-select" required value={form.type} onChange={e=>setForm({...form,type:e.target.value,brand:''})}>{['Celular','Portátil','Tableta','Consola','Computador','Otro'].map(x=><option key={x}>{x}</option>)}</select></div><div><label className="form-label" htmlFor="device-brand">Marca *</label><DeviceBrandSelect key={form.type} id="device-brand" type={form.type} value={form.brand} onChange={brand=>setForm({...form,brand})} devices={devices}/></div><div><label className="form-label">Modelo *</label><input className="form-control" required value={form.model} onChange={e=>setForm({...form,model:e.target.value})}/></div><div><label className="form-label">Serial *</label><input className="form-control" required value={form.serialNumber} onChange={e=>setForm({...form,serialNumber:e.target.value})}/></div><div><label className="form-label">Descripción *</label><input className="form-control" required value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div><div className="full-width"><button className="btn btn-lunara">Registrar dispositivo</button></div></form>
     <div className="table-responsive mt-4"><table className="table lunara-table"><thead><tr><th>DISPOSITIVO</th><th>TIPO</th><th>CLIENTE</th><th>SERIAL</th></tr></thead><tbody>{devices.map(d=><tr key={d.id}><td><strong>{d.brand} {d.model}</strong></td><td>{d.type}</td><td>{d.client?.fullName||clients.find(c=>c.id===d.clientId)?.fullName}</td><td>{d.serialNumber||'—'}</td></tr>)}</tbody></table></div>
+  </section>;
+}
+
+function LaborPriceGuide({ role }) {
+  const isAdmin = role === 'Administrador';
+  const emptyForm = { deviceType: 'Celular', brand: '', workType: '', price: '', isActive: true, isSample: false };
+  const [entries, setEntries] = useState([]);
+  const [search, setSearch] = useState('');
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const deviceTypes = ['Celular', 'Portátil', 'Tableta', 'Consola', 'Computador', 'Otro'];
+  const load = () => api.laborPriceGuide().then(setEntries).catch(e => setError(e.message));
+  useEffect(() => { load(); }, []);
+
+  function edit(entry) {
+    setEditingId(entry.id);
+    setForm({
+      deviceType: entry.deviceType,
+      brand: entry.brand,
+      workType: entry.workType,
+      price: String(entry.price),
+      isActive: entry.isActive,
+      isSample: entry.isSample
+    });
+    setError('');
+    setMessage('');
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const payload = { ...form, price: Number(form.price) };
+      if (editingId) {
+        await api.updateLaborPrice(editingId, payload);
+        setMessage('Tarifa actualizada.');
+      } else {
+        await api.createLaborPrice(payload);
+        setMessage('Tarifa agregada a la guía.');
+      }
+      setEditingId(null);
+      setForm(emptyForm);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleActive(entry) {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      await api.updateLaborPrice(entry.id, { ...entry, isActive: !entry.isActive });
+      setMessage(entry.isActive ? 'Tarifa desactivada.' : 'Tarifa activada.');
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const filteredEntries = entries.filter(entry => {
+    const term = search.trim().toLocaleLowerCase();
+    const digits = term.replace(/\D/g, '');
+    return !term ||
+      [entry.deviceType, entry.brand, entry.workType]
+        .some(value => value.toLocaleLowerCase().includes(term)) ||
+      (digits.length > 0 && String(entry.price).includes(digits));
+  });
+
+  return <section className="panel page-panel">
+    <span className="pill">MANO DE OBRA</span>
+    <h3>Guía de precios de mano de obra</h3>
+    <p className="muted">{isAdmin ? 'Administra las tarifas por tipo de equipo, marca y trabajo.' : 'Consulta las tarifas aprobadas por el administrador para preparar presupuestos.'}</p>
+    <div className="alert alert-info mt-3 mb-0" role="note">Las tarifas marcadas como <strong>PRUEBA</strong> son valores referenciales para demostración. Valídalas antes de usarlas con clientes.</div>
+    {error && <div className="alert alert-warning mt-3" role="alert">{error}</div>}
+    {message && <div className="alert alert-success mt-3" role="status">{message}</div>}
+    {isAdmin && <form onSubmit={submit} className="form-grid compact-form">
+      <div><label className="form-label">Tipo de equipo *</label><select className="form-select" required value={form.deviceType} onChange={e => setForm({ ...form, deviceType: e.target.value })}>{deviceTypes.map(type => <option key={type}>{type}</option>)}</select></div>
+      <div><label className="form-label">Marca *</label><input className="form-control" required maxLength="80" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} placeholder="Ej. Apple"/></div>
+      <div><label className="form-label">Tipo de trabajo *</label><input className="form-control" required maxLength="120" value={form.workType} onChange={e => setForm({ ...form, workType: e.target.value })} placeholder="Ej. Cambio de pantalla"/></div>
+      <div><label className="form-label">Precio de mano de obra (COP) *</label><input className="form-control" required type="number" min="0" max="1000000000" step="1000" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })}/></div>
+      <div className="full-width form-check"><input id="labor-price-sample" className="form-check-input" type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked })}/><label className="form-check-label" htmlFor="labor-price-sample">Marcar como tarifa de prueba / referencial</label></div>
+      {editingId && <div className="full-width form-check"><input id="labor-price-active" className="form-check-input" type="checkbox" checked={form.isActive} onChange={e => setForm({ ...form, isActive: e.target.checked })}/><label className="form-check-label" htmlFor="labor-price-active">Tarifa activa y visible para técnicos</label></div>}
+      <div className="full-width d-flex gap-2"><button className="btn btn-lunara" disabled={busy}>{busy ? 'Guardando…' : editingId ? 'Guardar cambios' : 'Agregar tarifa'}</button>{editingId && <button type="button" className="btn btn-outline-secondary" disabled={busy} onClick={() => { setEditingId(null); setForm(emptyForm); }}>Cancelar</button>}</div>
+    </form>}
+    <div className="client-directory-toolbar mt-4">
+      <input className="form-control search-input" aria-label="Buscar tarifas de mano de obra" placeholder="Buscar por equipo, marca, trabajo o precio…" value={search} onChange={e => setSearch(e.target.value)} />
+      {search && <button type="button" className="btn btn-outline-secondary" onClick={() => setSearch('')}>Limpiar</button>}
+      <span className="muted">{filteredEntries.length} {filteredEntries.length === 1 ? 'tarifa' : 'tarifas'}</span>
+    </div>
+    <div className="table-responsive"><table className="table lunara-table align-middle">
+      <thead><tr><th>TIPO DE EQUIPO</th><th>MARCA</th><th>TIPO DE TRABAJO</th><th>MANO DE OBRA</th>{isAdmin && <th>ESTADO</th>}{isAdmin && <th>ACCIONES</th>}</tr></thead>
+      <tbody>{filteredEntries.map(entry => <tr key={entry.id}>
+        <td>{entry.deviceType}</td><td><strong>{entry.brand}</strong></td><td>{entry.workType} {entry.isSample && <span className="status-badge pending ms-1">PRUEBA</span>}</td><td>{money(entry.price)}</td>
+        {isAdmin && <td>{entry.isActive ? 'Activa' : 'Inactiva'}</td>}
+        {isAdmin && <td className="d-flex gap-2"><button type="button" className="btn btn-sm btn-outline-primary" disabled={busy} onClick={() => edit(entry)}>Editar</button><button type="button" className="btn btn-sm btn-outline-secondary" disabled={busy} onClick={() => toggleActive(entry)}>{entry.isActive ? 'Desactivar' : 'Activar'}</button></td>}
+      </tr>)}
+      {!filteredEntries.length && <tr><td colSpan={isAdmin ? 6 : 4}><div className="empty-state">{entries.length ? 'No hay tarifas que coincidan con la búsqueda.' : isAdmin ? 'Aún no hay tarifas. Agrega la primera desde el formulario.' : 'El administrador aún no ha publicado tarifas.'}</div></td></tr>}</tbody>
+    </table></div>
   </section>;
 }
 
@@ -1103,7 +1381,7 @@ export default function App() {
     refreshSession();
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const expireSession = () => refreshSession();
     window.addEventListener('lunara-session-expired', expireSession);
     return () => window.removeEventListener('lunara-session-expired', expireSession);
@@ -1131,6 +1409,7 @@ export default function App() {
           <Route path="/reparaciones" element={isAdmin || isTechnician ? <Repairs role={role} /> : <DemoPortal role={role} user={user} />} />
           <Route path="/nueva-reparacion" element={isAdmin ? <NewRepair /> : <DemoPortal role={role} user={user} />} />
           <Route path="/reparaciones/:id" element={<RepairDetail role={role} />} />
+          <Route path="/guia-precios" element={isAdmin || isTechnician ? <LaborPriceGuide role={role} /> : <DemoPortal role={role} user={user} />} />
           <Route path="/clientes" element={isAdmin ? <Clients /> : <DemoPortal role={role} user={user} />} />
           <Route path="/dispositivos" element={isAdmin ? <Devices /> : <DemoPortal role={role} user={user} />} />
           <Route path="/repuestos" element={isAdmin ? <SpareParts /> : <DemoPortal role={role} user={user} />} />

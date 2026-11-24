@@ -11,8 +11,9 @@ backend/Lunara.Api/appsettings.*.json
 !backend/Lunara.Api/appsettings.Development.example.json
 backend/Lunara.Api/Data/*.csv
 backend/Lunara.Api/data/*.csv
+backend/Lunara.Api/Data/*.db*
+backend/Lunara.Api/data/*.db*
 backend/Lunara.Api/lunara_clientes_prueba.csv
 backend/Lunara.Api/lunara_cuentas_desarrollo.csv
 **/*.backup
-**/*.pre-login.backup
 .DS_Store

@@ -5,6 +5,57 @@ namespace Lunara.Api.Data;
 
 public static class DemoSeeder
 {
+    public static async Task SeedLaborPriceGuideAsync(LunaraDbContext db)
+    {
+        if (await db.LaborPriceGuideEntries.AnyAsync()) return;
+
+        var sampleEntries = new (string DeviceType, string Brand, string WorkType, decimal Price)[]
+        {
+            ("Celular", "Apple", "Cambio de pantalla", 120000m),
+            ("Celular", "Apple", "Cambio de batería", 80000m),
+            ("Celular", "Samsung", "Cambio de pantalla", 105000m),
+            ("Celular", "Samsung", "Cambio de batería", 75000m),
+            ("Celular", "Xiaomi", "Cambio de pantalla", 90000m),
+            ("Celular", "Xiaomi", "Cambio de batería", 65000m),
+            ("Portátil", "Apple", "Mantenimiento preventivo", 110000m),
+            ("Portátil", "Apple", "Cambio de pantalla", 190000m),
+            ("Portátil", "Lenovo", "Mantenimiento preventivo", 85000m),
+            ("Portátil", "Lenovo", "Cambio de teclado", 115000m),
+            ("Portátil", "HP", "Mantenimiento preventivo", 85000m),
+            ("Portátil", "HP", "Cambio de pantalla", 145000m),
+            ("Tableta", "Apple", "Cambio de pantalla", 150000m),
+            ("Tableta", "Apple", "Cambio de batería", 95000m),
+            ("Tableta", "Samsung", "Cambio de pantalla", 125000m),
+            ("Tableta", "Samsung", "Cambio de batería", 85000m),
+            ("Consola", "Sony", "Limpieza y mantenimiento", 95000m),
+            ("Consola", "Sony", "Reparación de puerto HDMI", 160000m),
+            ("Consola", "Microsoft", "Limpieza y mantenimiento", 95000m),
+            ("Consola", "Microsoft", "Reparación de puerto HDMI", 155000m),
+            ("Consola", "Nintendo", "Limpieza y mantenimiento", 85000m),
+            ("Consola", "Nintendo", "Reparación de puerto de carga", 140000m),
+            ("Computador", "Dell", "Mantenimiento preventivo", 80000m),
+            ("Computador", "Dell", "Instalación de sistema operativo", 90000m),
+            ("Computador", "Lenovo", "Mantenimiento preventivo", 80000m),
+            ("Computador", "Lenovo", "Instalación de sistema operativo", 90000m),
+            ("Computador", "Apple", "Mantenimiento preventivo", 120000m),
+            ("Computador", "Apple", "Instalación de sistema operativo", 110000m),
+            ("Otro", "Multimarca", "Diagnóstico y revisión", 50000m),
+            ("Otro", "Multimarca", "Mantenimiento general", 80000m)
+        };
+
+        db.LaborPriceGuideEntries.AddRange(sampleEntries.Select(entry =>
+            new LaborPriceGuideEntry
+            {
+                DeviceType = entry.DeviceType,
+                Brand = entry.Brand,
+                WorkType = entry.WorkType,
+                Price = entry.Price,
+                IsActive = true,
+                IsSample = true
+            }));
+        await db.SaveChangesAsync();
+    }
+
     public static async Task SeedAsync(LunaraDbContext db)
     {
         if (await db.Clients.AnyAsync()) return;

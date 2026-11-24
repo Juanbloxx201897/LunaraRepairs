@@ -1,0 +1,20 @@
+@baseUrl = http://localhost:5080
+@token = replace-with-a-valid-admin-or-assigned-technician-token
+@repairId = 1
+
+### Trigger the ready notification when the assigned technician marks the repair ready
+PUT {{baseUrl}}/api/repairs/{{repairId}}/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "Listo para recoger",
+  "note": "Pruebas satisfactorias"
+}
+
+### Retry the notification if SMTP was unavailable during the status change
+POST {{baseUrl}}/api/repairs/{{repairId}}/ready-email
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}

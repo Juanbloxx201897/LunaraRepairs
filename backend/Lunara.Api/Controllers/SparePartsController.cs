@@ -8,12 +8,13 @@ namespace Lunara.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin,Administrator")]
+[Authorize]
 // Expone el inventario; el servidor genera el código para que cada repuesto tenga una identificación única.
 public class SparePartsController(LunaraDbContext db) : ControllerBase
 {
     // Devuelve el inventario y permite una búsqueda sencilla por los campos principales.
     [HttpGet]
+    [Authorize(Roles = "Admin,Administrator")]
     public async Task<ActionResult<IEnumerable<SparePart>>> Get([FromQuery] string? search)
     {
         var query = db.SpareParts.AsNoTracking();
@@ -29,6 +30,7 @@ public class SparePartsController(LunaraDbContext db) : ControllerBase
 
     // Valida los datos del formulario y asigna el código antes de guardar el repuesto.
     [HttpPost]
+    [Authorize(Roles = "Admin,Administrator")]
     public async Task<ActionResult<SparePart>> Create(SparePartCreateDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Name) || string.IsNullOrWhiteSpace(dto.Category) ||
@@ -56,6 +58,7 @@ public class SparePartsController(LunaraDbContext db) : ControllerBase
     }
 
     [HttpGet("purchases")]
+    [Authorize(Roles = "Admin,Administrator")]
     public async Task<ActionResult<IEnumerable<SparePartPurchase>>> GetPurchases() =>
         Ok(await db.SparePartPurchases.AsNoTracking()
             .OrderBy(x => x.Status == "Pedido" ? 0 : 1)
@@ -63,6 +66,7 @@ public class SparePartsController(LunaraDbContext db) : ControllerBase
             .ToListAsync());
 
     [HttpPost("purchases")]
+    [Authorize(Roles = "Admin,Administrator")]
     public async Task<ActionResult<SparePartPurchase>> CreatePurchase(SparePartPurchaseCreateDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Supplier) || dto.Quantity <= 0 || dto.UnitPrice < 0)
@@ -100,6 +104,7 @@ public class SparePartsController(LunaraDbContext db) : ControllerBase
     }
 
     [HttpPut("purchases/{id:int}/purchased")]
+    [Authorize(Roles = "Admin,Administrator")]
     public async Task<IActionResult> MarkPurchased(int id)
     {
         var purchase = await db.SparePartPurchases.FirstOrDefaultAsync(x => x.Id == id);
@@ -134,4 +139,14 @@ public class SparePartsController(LunaraDbContext db) : ControllerBase
         await db.SaveChangesAsync();
         return NoContent();
     }
+
+    [HttpGet("catalog")]
+    [Authorize(Roles = "Technician,Admin,Administrator")]
+    public async Task<ActionResult<IEnumerable<SparePartCatalogDto>>> GetCatalog(
+        CancellationToken cancellationToken) =>
+        Ok(await db.SpareParts.AsNoTracking()
+            .OrderBy(x => x.Name)
+            .Select(x => new SparePartCatalogDto(
+                x.Id, x.Name, x.Category, x.Brand, x.Quantity, x.UnitPrice))
+            .ToListAsync(cancellationToken));
 }

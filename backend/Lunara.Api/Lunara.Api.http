@@ -1,0 +1,44 @@
+@baseUrl = http://localhost:5080
+@adminToken = replace-with-admin-jwt
+@technicianToken = replace-with-technician-jwt
+@clientToken = replace-with-client-jwt
+@repairId = 1
+
+### Technician price guide: current catalog prices and inventory
+GET {{baseUrl}}/api/spareparts/catalog
+Authorization: Bearer {{technicianToken}}
+
+### Save diagnosis, calculate estimate from catalog prices, and email the customer
+PUT {{baseUrl}}/api/repairs/{{repairId}}/diagnosis
+Authorization: Bearer {{technicianToken}}
+Content-Type: application/json
+
+{
+  "diagnosis": "Requiere reemplazo de pantalla y revisión de conectores.",
+  "workType": "Cambio de pantalla",
+  "laborCost": 45000,
+  "parts": [
+    { "sparePartId": 1, "quantity": 1 }
+  ],
+  "budget": 0,
+  "note": "Presupuesto enviado al cliente."
+}
+
+### Retry sending a pending estimate email
+POST {{baseUrl}}/api/repairs/{{repairId}}/budget-email
+Authorization: Bearer {{technicianToken}}
+Content-Length: 0
+
+### Customer approves a pending estimate
+PUT {{baseUrl}}/api/repairs/{{repairId}}/status
+Authorization: Bearer {{clientToken}}
+Content-Type: application/json
+
+{
+  "status": "Aprobado",
+  "note": "Presupuesto aprobado por el cliente."
+}
+
+### Admin sales metrics include monthly delivered revenue
+GET {{baseUrl}}/api/repairs/stats
+Authorization: Bearer {{adminToken}}

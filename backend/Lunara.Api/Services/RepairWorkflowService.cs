@@ -11,12 +11,14 @@ public class RepairWorkflowService(LunaraDbContext db)
     public async Task<(bool Success, string Message)> ChangeStatusAsync(
         int id,
         string next,
-        string note)
+        string note,
+        CancellationToken cancellationToken = default)
     {
         if (!RepairStatuses.All.Contains(next))
             return (false, "El estado indicado no existe.");
 
-        var order = await db.RepairOrders.FirstOrDefaultAsync(x => x.Id == id);
+        var order = await db.RepairOrders.FirstOrDefaultAsync(
+            x => x.Id == id, cancellationToken);
 
         if (order is null)
             return (false, "No se encontró la orden.");
@@ -67,7 +69,7 @@ public class RepairWorkflowService(LunaraDbContext db)
             ChangedAt = DateTime.UtcNow
         });
 
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(cancellationToken);
 
         return (true, "Estado actualizado.");
     }

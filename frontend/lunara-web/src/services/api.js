@@ -107,12 +107,16 @@ export const api = {
   devices: () => request('/api/devices'),
   createDevice: (body) => request('/api/devices', json('POST', body)),
   spareParts: () => request('/api/spareparts'),
+  sparePartCatalog: () => request('/api/spareparts/catalog'),
   createSparePart: (body) => request('/api/spareparts', json('POST', body)),
   sparePartPurchases: () => request('/api/spareparts/purchases'),
   createSparePartPurchase: (body) =>
     request('/api/spareparts/purchases', json('POST', body)),
   markSparePartPurchased: (id) =>
     request(`/api/spareparts/purchases/${id}/purchased`, json('PUT', {})),
+  laborPriceGuide: () => request('/api/laborprices'),
+  createLaborPrice: (body) => request('/api/laborprices', json('POST', body)),
+  updateLaborPrice: (id, body) => request(`/api/laborprices/${id}`, json('PUT', body)),
   technicians: () => request('/api/technicians'),
   createTechnician: (body) => request('/api/technicians', json('POST', body)),
   updateTechnicianAccess: (id, body) =>
@@ -127,6 +131,10 @@ export const api = {
   stats: () => request('/api/repairs/stats'),
   diagnosis: (id, body) =>
     request(`/api/repairs/${id}/diagnosis`, json('PUT', body)),
+  sendBudgetEmail: (id) =>
+    request(`/api/repairs/${id}/budget-email`, json('POST', {})),
+  sendReadyEmail: (id) =>
+    request(`/api/repairs/${id}/ready-email`, json('POST', {})),
   status: (id, status, note = '') =>
     request(`/api/repairs/${id}/status`, json('PUT', { status, note })),
   work: (id, workPerformed, note = '') =>

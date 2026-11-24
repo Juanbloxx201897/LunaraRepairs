@@ -2,6 +2,7 @@ using System.Text;
 using Lunara.Api.Data;
 using Lunara.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
@@ -15,13 +16,22 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddSingleton(new CsvDataStore(
+var databasePath = builder.Configuration["Database:Path"] ?? "data/lunara.db";
+databasePath = Path.GetFullPath(databasePath, builder.Environment.ContentRootPath);
+Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+var connectionString = new SqliteConnectionStringBuilder
+{
+    DataSource = databasePath
+}.ToString();
+builder.Services.AddSingleton(new LegacyCsvImporter(
     Path.Combine(builder.Environment.ContentRootPath, "data")));
 builder.Services.AddDbContext<LunaraDbContext>(options =>
-    options.UseInMemoryDatabase("LunaraMemoryDb"));
+    options.UseSqlite(connectionString));
 
 builder.Services.AddScoped<RepairWorkflowService>();
 builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddScoped<IBudgetEmailService, BudgetEmailService>();
+builder.Services.AddScoped<IRepairReadyEmailService, RepairReadyEmailService>();
 
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException(
@@ -124,11 +134,24 @@ app.MapControllers();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<LunaraDbContext>();
-    db.DisableCsvPersistence();
-    await scope.ServiceProvider.GetRequiredService<CsvDataStore>().LoadIntoAsync(db);
+    await db.Database.MigrateAsync();
 
-    // Los ejemplos se agregan solo cuando hacen falta; el estado final queda en CSV tras sembrar.
+    if (!await db.Clients.AnyAsync() &&
+        !await db.Devices.AnyAsync() &&
+        !await db.Technicians.AnyAsync() &&
+        !await db.RepairOrders.AnyAsync() &&
+        !await db.SpareParts.AnyAsync() &&
+        !await db.SparePartPurchases.AnyAsync() &&
+        !await db.AuthUsers.AnyAsync())
+    {
+        await scope.ServiceProvider
+            .GetRequiredService<LegacyCsvImporter>()
+            .LoadIntoAsync(db);
+    }
+
+    // Los ejemplos se agregan solo cuando hacen falta y quedan persistidos en SQLite.
     await DemoSeeder.SeedAsync(db);
+    await DemoSeeder.SeedLaborPriceGuideAsync(db);
 
     var clientCsvPath = Path.Combine(
         app.Environment.ContentRootPath,
@@ -146,8 +169,6 @@ using (var scope = app.Services.CreateScope())
         app.Configuration["Admin:InitialPassword"] ??
             (app.Environment.IsDevelopment() ? "admin" : null),
         resetExistingAdminPassword: app.Environment.IsDevelopment());
-    db.EnableCsvPersistence();
-    await db.SaveCsvSnapshotAsync();
 }
 
 app.Run();
